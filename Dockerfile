@@ -1,19 +1,19 @@
 FROM ubuntu:16.04
 
-COPY ACCC4CF8.asc /usr/src/app/
+WORKDIR /usr/src/app
 
 RUN echo "deb http://apt.postgresql.org/pub/repos/apt/ xenial-pgdg main" \
         > /etc/apt/sources.list.d/pgdg.list && \
-    apt-key add /usr/src/app/ACCC4CF8.asc && \
+    apt-key adv --keyserver keyserver.ubuntu.com --recv-keys ACCC4CF8 && \
     apt-get update && \
-    apt-get install -y \
-        postgresql-client-9.5 \
+    apt-get install -y --no-install-recommends \
+        postgresql-client-9.6 \
         mysql-client \
         python-yaml \
         python-boto \
         && \
     rm -rf /var/lib/apt/lists/*
 
-COPY dump.py /usr/src/app/
+COPY dump.py ./
 
-ENTRYPOINT [ "/usr/src/app/dump.py" ]
+ENTRYPOINT [ "./dump.py" ]

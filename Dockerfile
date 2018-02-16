@@ -16,4 +16,4 @@ RUN echo "deb http://apt.postgresql.org/pub/repos/apt/ xenial-pgdg main" \
 
 COPY dump.py ./
 
-ENTRYPOINT [ "./dump.py" ]
+CMD [ "/usr/src/app/dump.py" ]

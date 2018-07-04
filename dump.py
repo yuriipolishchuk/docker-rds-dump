@@ -47,7 +47,7 @@ CONFIG.setdefault('DB_PASSWORD', os.environ.get('DB_PASSWORD', ''))
 
 CONFIG.setdefault(
     'DB_PUBLICLY_ACCESSIBLE',
-    os.environ.get('DB_PUBLICLY_ACCESSIBLE', 'True')
+    os.environ.get('DB_PUBLICLY_ACCESSIBLE', 'False')
 )
 
 

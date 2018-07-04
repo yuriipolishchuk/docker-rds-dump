@@ -12,6 +12,7 @@ from boto import rds2
 from boto.exception import NoAuthHandlerFound, JSONResponseError
 from time import sleep
 
+
 CONFIG_FILE_PATH = os.environ.get(
     'CONFIG_FILE_PATH',
     os.path.join('/', 'run', 'secrets', 'config.yml')
@@ -34,12 +35,25 @@ CONFIG.setdefault(
     os.environ.get('DB_INSTANCE_CLASS', 'db.t2.micro')
 )
 CONFIG.setdefault('MAX_RETRIES', int(os.environ.get('MAX_RETRIES', 2)))
-CONFIG.setdefault('DB_SUBNET_GROUP_NAME', os.environ.get('DB_SUBNET_GROUP_NAME'))
+CONFIG.setdefault(
+    'DB_SUBNET_GROUP_NAME',
+    os.environ.get('DB_SUBNET_GROUP_NAME')
+)
 
 if not 'DB_USER' in CONFIG and 'DB_USER' in os.environ:
     CONFIG['DB_USER'] = os.environ['DB_USER']
 
 CONFIG.setdefault('DB_PASSWORD', os.environ.get('DB_PASSWORD', ''))
+
+CONFIG.setdefault(
+    'DB_PUBLICLY_ACCESSIBLE',
+    os.environ.get('DB_PUBLICLY_ACCESSIBLE', 'True')
+)
+
+
+def str2bool(v):
+    return v.lower() in ("yes", "true", "t", "1")
+
 
 def db_credentials(db_name):
     db_config = CONFIG.get('databases', {})
@@ -57,6 +71,7 @@ def db_credentials(db_name):
         credentials.get('password', CONFIG.get('DB_PASSWORD', '')),
     )
 
+
 def dump_postgres(db_instance, db_name, out_file_name):
     db_user, os.environ['PGPASSWORD'] = db_credentials(db_name)
     if not db_user:
@@ -72,6 +87,7 @@ def dump_postgres(db_instance, db_name, out_file_name):
             '-p', str(db_instance['Endpoint']['Port']),
             db_name
         ], stdout=outfile)
+
 
 def dump_mysql(db_instance, db_name, out_file_name):
     db_user, db_password = db_credentials(db_name)
@@ -89,6 +105,13 @@ def dump_mysql(db_instance, db_name, out_file_name):
             '-P', str(db_instance['Endpoint']['Port']),
             db_name
         ], stdout=outfile)
+
+
+DUMP_CMDS = {
+    'postgres': dump_postgres,
+    'mysql': dump_mysql,
+}
+
 
 def with_retry(func, *args, **kwargs):
     ret = None
@@ -108,114 +131,114 @@ def with_retry(func, *args, **kwargs):
             sleep(10)
     raise ret
 
-dump_cmds = {
-    'postgres': dump_postgres,
-    'mysql': dump_mysql,
-}
 
-if len(sys.argv) < 2:
-    print 'Usage: %s db-instance-name [db-name ...]' % sys.argv[0]
-    sys.exit(1)
+if __name__ == '__main__':
 
-conn = with_retry(rds2.connect_to_region, CONFIG['AWS_REGION'],
-                  aws_access_key_id=CONFIG['AWS_ACCESS_KEY_ID'],
-                  aws_secret_access_key=CONFIG['AWS_SECRET_ACCESS_KEY'])
+    if len(sys.argv) < 2:
+        print 'Usage: %s db-instance-name [db-name ...]' % sys.argv[0]
+        sys.exit(1)
 
-_, db_instance_name, db_names = sys.argv[0], sys.argv[1], sys.argv[2:]
+    conn = with_retry(rds2.connect_to_region, CONFIG['AWS_REGION'],
+                      aws_access_key_id=CONFIG['AWS_ACCESS_KEY_ID'],
+                      aws_secret_access_key=CONFIG['AWS_SECRET_ACCESS_KEY'])
 
-snapshots = conn.describe_db_snapshots(db_instance_name)\
-        ['DescribeDBSnapshotsResponse']\
-        ['DescribeDBSnapshotsResult']\
-        ['DBSnapshots']
+    _, db_instance_name, db_names = sys.argv[0], sys.argv[1], sys.argv[2:]
 
-snapshots = [ s for s in snapshots if s['Status'] == 'available' ]
-snapshots = sorted(snapshots, key=lambda s: s['SnapshotCreateTime'])
+    print "Getting latest available snapshot for instance %s" % db_instance_name
 
-if len(snapshots) == 0:
-    print 'No snapshots found for instance "%s"' % db_instance_name
-    sys.exit(2)
+    snapshots = conn.describe_db_snapshots(db_instance_name)[
+        'DescribeDBSnapshotsResponse']['DescribeDBSnapshotsResult']['DBSnapshots']
 
-latest_snapshot = snapshots[-1]
-latest_snapshot_name = latest_snapshot['DBSnapshotIdentifier'].split(':')[-1]
+    snapshots = [s for s in snapshots if s['Status'] == 'available']
+    snapshots = sorted(snapshots, key=lambda s: s['SnapshotCreateTime'])
 
-print 'Found snapshot "%s".' % latest_snapshot['DBSnapshotIdentifier']
+    if len(snapshots) == 0:
+        print 'No snapshots found for instance "%s"' % db_instance_name
+        sys.exit(2)
 
-identifier_prefix = 'dump-{}'.format(
-    "".join([random.choice(string.letters) for x in range(8)]),
-)
+    latest_snapshot = snapshots[-1]
+    latest_snapshot_name = latest_snapshot['DBSnapshotIdentifier'].split(
+        ':')[-1]
 
-dump_instance_identifier = '{}-{}'.format(
-    identifier_prefix,
-    latest_snapshot_name,
-)
-dump_instance_identifier = dump_instance_identifier[:63]
+    print 'Found snapshot "%s".' % latest_snapshot['DBSnapshotIdentifier']
 
+    identifier_prefix = 'dump-{}'.format(
+        "".join([random.choice(string.letters) for x in range(8)]),
+    )
 
-with_retry(
-    conn.restore_db_instance_from_db_snapshot,
-    dump_instance_identifier,
-    latest_snapshot['DBSnapshotIdentifier'],
-    publicly_accessible=True,
-    db_instance_class=CONFIG['DB_INSTANCE_CLASS'],
-    db_subnet_group_name=CONFIG['DB_SUBNET_GROUP_NAME'],
-)
+    dump_instance_identifier = '{}-{}'.format(
+        identifier_prefix,
+        latest_snapshot_name,
+    )
+    dump_instance_identifier = dump_instance_identifier[:63]
 
-print 'Launched instance "%s".' % dump_instance_identifier
+    print 'Launching instance "%s".' % dump_instance_identifier
 
-try:
-    TIMEOUT = 7200
-    SLEEP_INTERVAL = 30
+    with_retry(
+        conn.restore_db_instance_from_db_snapshot,
+        dump_instance_identifier,
+        latest_snapshot['DBSnapshotIdentifier'],
+        publicly_accessible=str2bool(CONFIG['DB_PUBLICLY_ACCESSIBLE']),
+        db_instance_class=CONFIG['DB_INSTANCE_CLASS'],
+        db_subnet_group_name=CONFIG['DB_SUBNET_GROUP_NAME'],
+    )
 
-    print "Waiting for instance to become available."
+    print 'Launched instance "%s".' % dump_instance_identifier
 
-    dump_instance = {}
+    try:
+        TIMEOUT = 7200
+        SLEEP_INTERVAL = 30
 
-    while TIMEOUT > 0:
-        try:
-            result = conn.describe_db_instances(
-                dump_instance_identifier,
-            )['DescribeDBInstancesResponse']['DescribeDBInstancesResult']
-            dump_instance = result['DBInstances'][0]
-            if dump_instance['DBInstanceStatus'] == 'available':
-                break
-        except JSONResponseError:
-            pass
+        print "Waiting for instance to become available."
 
-        TIMEOUT -= SLEEP_INTERVAL
-        sleep(SLEEP_INTERVAL)
+        dump_instance = {}
 
-    if dump_instance.get('DBInstanceStatus') != 'available':
-        print ('Instance "%s" did not become available within time limit. '
-               'Aborting.' % dump_instance_identifier)
-        exit(3)
+        while TIMEOUT > 0:
+            try:
+                result = conn.describe_db_instances(
+                    dump_instance_identifier,
+                )['DescribeDBInstancesResponse']['DescribeDBInstancesResult']
+                dump_instance = result['DBInstances'][0]
+                if dump_instance['DBInstanceStatus'] == 'available':
+                    break
+            except JSONResponseError:
+                pass
 
-    print "Instance is available."
+            TIMEOUT -= SLEEP_INTERVAL
+            sleep(SLEEP_INTERVAL)
 
-    print 'Instance engine is "%s".' % dump_instance['Engine']
+        if dump_instance.get('DBInstanceStatus') != 'available':
+            print('Instance "%s" did not become available within time limit. '
+                  'Aborting.' % dump_instance_identifier)
+            exit(3)
 
-    if not dump_instance['Engine'] in dump_cmds:
-        print "Error: Can't handle databases of this type. Aborting."
-        sys.exit(4)
+        print "Instance is available."
 
-    if len(db_names) == 0:
-        if len(CONFIG.get('databases', [])) == 0:
-            db_names = [dump_instance['DBName']]
-        else:
-            db_names = CONFIG['databases'].keys()
+        print 'Instance engine is "%s".' % dump_instance['Engine']
 
-    for db_name in db_names:
-        print 'Dumping "%s".' % db_name
-        with_retry(
-            dump_cmds[dump_instance['Engine']],
-            dump_instance,
-            db_name,
-            '%s-%s' % (db_name, latest_snapshot_name),
-            retries=10,
-        )
+        if not dump_instance['Engine'] in DUMP_CMDS:
+            print "Error: Can't handle databases of this type. Aborting."
+            sys.exit(4)
 
-    print "Dump completed."
-finally:
-    with_retry(conn.delete_db_instance, dump_instance_identifier,
-               skip_final_snapshot=True)
+        if len(db_names) == 0:
+            if len(CONFIG.get('databases', [])) == 0:
+                db_names = [dump_instance['DBName']]
+            else:
+                db_names = CONFIG['databases'].keys()
 
-    print 'Terminated "%s".' % dump_instance_identifier
+        for db_name in db_names:
+            print 'Dumping "%s".' % db_name
+            with_retry(
+                DUMP_CMDS[dump_instance['Engine']],
+                dump_instance,
+                db_name,
+                '%s-%s' % (db_name, latest_snapshot_name),
+                retries=10,
+            )
+
+        print "Dump completed."
+    finally:
+        with_retry(conn.delete_db_instance, dump_instance_identifier,
+                   skip_final_snapshot=True)
+
+        print 'Terminated "%s".' % dump_instance_identifier

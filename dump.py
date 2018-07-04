@@ -50,6 +50,11 @@ CONFIG.setdefault(
     os.environ.get('DB_PUBLICLY_ACCESSIBLE', 'False')
 )
 
+CONFIG.setdefault(
+    'VPC_SECURITY_GROUP_IDS',
+    os.environ.get('VPC_SECURITY_GROUP_IDS')
+)
+
 
 def str2bool(v):
     return v.lower() in ("yes", "true", "t", "1")
@@ -211,6 +216,16 @@ if __name__ == '__main__':
             print('Instance "%s" did not become available within time limit. '
                   'Aborting.' % dump_instance_identifier)
             exit(3)
+
+        # assign security group
+        if CONFIG['VPC_SECURITY_GROUP_IDS']:
+            print "Changing security group to %s" % CONFIG['VPC_SECURITY_GROUP_IDS']
+            result = conn.modify_db_instance(
+                db_instance_identifier=dump_instance_identifier,
+                vpc_security_group_ids=CONFIG['VPC_SECURITY_GROUP_IDS'],
+                apply_immediately=True
+            )
+
 
         print "Instance is available."
 

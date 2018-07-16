@@ -7,7 +7,7 @@ RUN echo "deb http://apt.postgresql.org/pub/repos/apt/ xenial-pgdg main" \
     apt-key adv --keyserver keyserver.ubuntu.com --recv-keys ACCC4CF8 && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-        postgresql-client-9.6 \
+        postgresql-client-10 \
         mysql-client \
         python-yaml \
         python-boto \

@@ -5,8 +5,9 @@ import random
 import string
 import subprocess
 import sys
-
 import yaml
+import datetime
+import tarfile
 
 from boto import rds2
 from boto.exception import NoAuthHandlerFound, JSONResponseError
@@ -40,7 +41,7 @@ CONFIG.setdefault(
     os.environ.get('DB_SUBNET_GROUP_NAME')
 )
 
-if not 'DB_USER' in CONFIG and 'DB_USER' in os.environ:
+if 'DB_USER' not in CONFIG and 'DB_USER' in os.environ:
     CONFIG['DB_USER'] = os.environ['DB_USER']
 
 CONFIG.setdefault('DB_PASSWORD', os.environ.get('DB_PASSWORD', ''))
@@ -54,6 +55,11 @@ CONFIG.setdefault(
     'VPC_SECURITY_GROUP_IDS',
     os.environ.get('VPC_SECURITY_GROUP_IDS')
 )
+
+
+def make_tarfile(output_filename, source_dir):
+    with tarfile.open(output_filename, "w:gz") as tar:
+        tar.add(source_dir, arcname=os.path.basename(source_dir))
 
 
 def str2bool(v):
@@ -147,18 +153,19 @@ if __name__ == '__main__':
                       aws_access_key_id=CONFIG['AWS_ACCESS_KEY_ID'],
                       aws_secret_access_key=CONFIG['AWS_SECRET_ACCESS_KEY'])
 
-    _, db_instance_name, db_names = sys.argv[0], sys.argv[1], sys.argv[2:]
+    _, db_instance_id, db_names = sys.argv[0], sys.argv[1], sys.argv[2:]
 
-    print "Getting latest available snapshot for instance %s" % db_instance_name
+    print "Getting latest available snapshot for instance %s" % db_instance_id
 
-    snapshots = conn.describe_db_snapshots(db_instance_name)[
-        'DescribeDBSnapshotsResponse']['DescribeDBSnapshotsResult']['DBSnapshots']
+    snapshots = conn.describe_db_snapshots(db_instance_id)[
+        'DescribeDBSnapshotsResponse']['DescribeDBSnapshotsResult'][
+        'DBSnapshots']
 
     snapshots = [s for s in snapshots if s['Status'] == 'available']
     snapshots = sorted(snapshots, key=lambda s: s['SnapshotCreateTime'])
 
     if len(snapshots) == 0:
-        print 'No snapshots found for instance "%s"' % db_instance_name
+        print 'No snapshots found for instance "%s"' % db_instance_id
         sys.exit(2)
 
     latest_snapshot = snapshots[-1]
@@ -219,13 +226,12 @@ if __name__ == '__main__':
 
         # assign security group
         if CONFIG['VPC_SECURITY_GROUP_IDS']:
-            print "Changing security group to %s" % CONFIG['VPC_SECURITY_GROUP_IDS']
+            print "Changing SG to %s" % CONFIG['VPC_SECURITY_GROUP_IDS']
             result = conn.modify_db_instance(
                 db_instance_identifier=dump_instance_identifier,
                 vpc_security_group_ids=CONFIG['VPC_SECURITY_GROUP_IDS'],
                 apply_immediately=True
             )
-
 
         print "Instance is available."
 
@@ -252,6 +258,14 @@ if __name__ == '__main__':
             )
 
         print "Dump completed."
+
+        output_filename = "/out/{:%Y-%m-%d--%H-%M}-{}.tar.gz".format(
+            datetime.datetime.now(),
+            db_instance_id)
+        print "Compressing dump file: {}".format(output_filename)
+
+        with_retry(make_tarfile, output_filename, "/out", retries=1)
+
     finally:
         with_retry(conn.delete_db_instance, dump_instance_identifier,
                    skip_final_snapshot=True)
